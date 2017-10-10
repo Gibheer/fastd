@@ -267,18 +267,16 @@ static bool open_iface(fastd_iface_t *iface, const char *ifname, uint16_t mtu) {
 
 	iface->cleanup = true;
 
-	if (ifname) {
-		if (strlen(ifname) <= 3 || strncmp(ifname, type, 3) != 0) {
-			pr_error("Invalid %s interface `%s'", type, ifname);
-			return false;
-		}
-
-		strncat(dev_name, ifname, IFNAMSIZ-1);
-
-		if (if_nametoindex(ifname))
-			iface->cleanup = false;
+		if (ifname && strnlen(ifname, IFNAMSIZ - 4) > IFNAMSIZ - 5) {
+			pr_error("interface name '%s' too long", ifname);
+		return false;
 	}
-	else {
+
+	if (ifname && strncmp(ifname, type, 3) == 0 && strnlen(ifname, 4) > 3) {
+		strncat(dev_name, ifname, IFNAMSIZ-1);
+		// The interface comes completely with an index, so no cleanup needed.
+		iface->cleanup = false;
+	} else {
 		strncat(dev_name, type, IFNAMSIZ-1);
 	}
 
@@ -290,6 +288,21 @@ static bool open_iface(fastd_iface_t *iface, const char *ifname, uint16_t mtu) {
 
 	if (!(iface->name = fdevname_r(iface->fd.fd, fastd_alloc(IFNAMSIZ), IFNAMSIZ)))
 		exit_errno("could not get TUN/TAP interface name");
+
+	if (ifname && strncmp(ifname, type, 3) != 0) {
+		struct ifreq ifr;
+		char *tmpname;
+
+		memset(&ifr, 0, sizeof(ifr));
+		(void)strlcpy(ifr.ifr_name, iface->name, sizeof(ifr.ifr_name));
+		tmpname = strdup(ifname);
+		ifr.ifr_data = tmpname;
+
+		if (ioctl(ctx.ioctl_sock, SIOCSIFNAME, &ifr) == -1) {
+			exit_errno("could not rename interface");
+		}
+		iface->name = tmpname;
+	}
 
 	switch (get_iface_type()) {
 	case IFACE_TYPE_TAP:
