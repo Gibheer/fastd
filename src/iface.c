@@ -53,6 +53,8 @@
 
 #ifdef __FreeBSD__
 #include <net/if_tap.h>
+#include <sys/sysctl.h>
+#include <net/if_mib.h>
 #endif
 
 #endif
@@ -247,6 +249,58 @@ static bool setup_tap(fastd_iface_t *iface, uint16_t mtu) {
 	return set_tap_mtu(iface, mtu);
 }
 
+int get_dev_name(const char *ifname, char **devname) {
+	struct ifmibdata ifmd;
+  size_t len;
+  int name[6];
+
+  name[0] = CTL_NET;
+  name[1] = PF_LINK;
+  name[2] = NETLINK_GENERIC;
+  name[3] = IFMIB_IFDATA;
+  name[5] = IFDATA_GENERAL;
+
+  int index = if_nametoindex(ifname);
+  if (index == 0) {
+    perror("unknown device");
+    return (1);
+  }
+
+	len = sizeof ifmd;
+	name[4] = index;
+	if (sysctl(name, 6, &ifmd, &len, 0, 0) < 0) {
+		perror("could not fetch interface details");
+		return (1);
+	}
+
+	if (strncmp(ifmd.ifmd_name, ifname, IFNAMSIZ) != 0) {
+	  perror("could not fetch interface name");
+	  return (1);
+	}
+
+	len = 0;
+	name[5] = IFDATA_DRIVERNAME;
+	if (sysctl(name, 6, NULL, &len, 0, 0) < 0) {
+	  perror("could allocate memory for interface name");
+	  return (1);
+	}
+
+	*devname = malloc(len);
+	if (*devname == NULL) {
+	  perror("could allocate memory for interface name");
+	  return (1);
+	}
+
+	if (sysctl(name, 6, *devname, &len, 0, 0) < 0) {
+	  perror("could not fetch interface name");
+	  free(*devname);
+	  *devname = NULL;
+		return (1);
+	}
+
+	return (0);
+}
+
 /** Opens the TUN/TAP device */
 static bool open_iface(fastd_iface_t *iface, const char *ifname, uint16_t mtu) {
 	char dev_name[5+IFNAMSIZ] = "/dev/";
@@ -267,15 +321,21 @@ static bool open_iface(fastd_iface_t *iface, const char *ifname, uint16_t mtu) {
 
 	iface->cleanup = true;
 
-		if (ifname && strnlen(ifname, IFNAMSIZ - 4) > IFNAMSIZ - 5) {
-			pr_error("interface name '%s' too long", ifname);
+  if (ifname && strnlen(ifname, IFNAMSIZ - 4) > IFNAMSIZ - 5) {
+    pr_error("interface name '%s' too long", ifname);
 		return false;
 	}
 
-	if (ifname && strncmp(ifname, type, 3) == 0 && strnlen(ifname, 4) > 3) {
-		strncat(dev_name, ifname, IFNAMSIZ-1);
-		// The interface comes completely with an index, so no cleanup needed.
-		iface->cleanup = false;
+  if (ifname) {
+		int index = if_nametoindex(ifname);
+    if (index > 0) {
+			char *device;
+			get_dev_name(ifname, &device);
+      strncat(dev_name, device, IFNAMSIZ-1);
+      iface->cleanup = false;
+    } else {
+      strncat(dev_name, type, IFNAMSIZ-1);
+    }
 	} else {
 		strncat(dev_name, type, IFNAMSIZ-1);
 	}
@@ -289,7 +349,7 @@ static bool open_iface(fastd_iface_t *iface, const char *ifname, uint16_t mtu) {
 	if (!(iface->name = fdevname_r(iface->fd.fd, fastd_alloc(IFNAMSIZ), IFNAMSIZ)))
 		exit_errno("could not get TUN/TAP interface name");
 
-	if (ifname && strncmp(ifname, type, 3) != 0) {
+	if (ifname && iface->cleanup) {
 		struct ifreq ifr;
 		char *tmpname;
 
