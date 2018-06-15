@@ -333,6 +333,8 @@ static bool open_iface(fastd_iface_t *iface, const char *ifname, uint16_t mtu) {
 			get_dev_name(ifname, &device);
       strncat(dev_name, device, IFNAMSIZ-1);
       iface->cleanup = false;
+      char *tmpname = strdup(ifname);
+      iface->name = tmpname;
     } else {
       strncat(dev_name, type, IFNAMSIZ-1);
     }
@@ -346,7 +348,7 @@ static bool open_iface(fastd_iface_t *iface, const char *ifname, uint16_t mtu) {
 		return false;
 	}
 
-	if (!(iface->name = fdevname_r(iface->fd.fd, fastd_alloc(IFNAMSIZ), IFNAMSIZ)))
+	if (!iface->name && !(iface->name = fdevname_r(iface->fd.fd, fastd_alloc(IFNAMSIZ), IFNAMSIZ)))
 		exit_errno("could not get TUN/TAP interface name");
 
 	if (ifname && iface->cleanup) {
